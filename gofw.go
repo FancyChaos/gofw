@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -17,30 +18,80 @@ type connection struct {
 	target net.Conn
 }
 
-// src and dest ports
+// source address and destination address
+// Final client bind address and target bind address
 var (
-	portFrom int
-	portTo   int
+	src     string
+	dst     string
+	srcBind string
+	dstBind string
 )
 
 // Parse arguments
 func init() {
-	flag.IntVar(&portFrom, "from", 0, "Port to forward tcp traffic from")
-	flag.IntVar(&portTo, "to", 0, "Port to forward tcp traffic to")
+	flag.StringVar(&src, "s", "", "Source address to forward TCP traffic from")
+	flag.StringVar(&dst, "d", "", "Destination address to forward TCP traffic to")
+
+}
+
+// Parse the bind address
+func parseAddress(addr string) string {
+	var finalAddr string
+
+	// Parse whole address with ip and port if it contains a ":"
+	if strings.Contains(addr, ":") {
+		splittedAddr := strings.Split(addr, ":")
+		if len(splittedAddr) != 2 {
+			println("Error:", addr, ": invalid combination of IP and port")
+			os.Exit(1)
+		}
+		ip := splittedAddr[0]
+		port := splittedAddr[1]
+
+		// Check if IP portion is valid
+		if ok := net.ParseIP(ip); ok == nil {
+			println("Error:", addr, ": invalid IP")
+			os.Exit(1)
+		}
+
+		// Check if port portion is valid
+		if _, ok := strconv.Atoi(port); ok != nil {
+			println("Error:", addr, ": invalid port")
+			os.Exit(1)
+		}
+
+		finalAddr = ip + ":" + port
+
+		return finalAddr
+	}
+
+	// Check if string is already a number (Port)
+	if _, ok := strconv.Atoi(addr); ok != nil {
+		println("Error: Argument:", addr, "is not a port or an address")
+		os.Exit(1)
+	}
+
+	finalAddr = "127.0.0.1:" + addr
+
+	return finalAddr
 }
 
 func main() {
-	// Simple greeting message
-	fmt.Println("GO! Forward 1.0")
-
-	// Parse the input flags
+	// Get input flags
 	flag.Parse()
 
 	// Check if ports are specified
-	if portFrom == 0 || portTo == 0 {
-		println("Error: Both ports must be specified")
+	if src == "" || dst == "" {
+		println("Error: Source and destination addresses must be specified")
 		os.Exit(1)
 	}
+
+	// Convert given address to valid bind address
+	srcBind = parseAddress(src)
+	dstBind = parseAddress(dst)
+
+	// Simple greeting message
+	fmt.Println("GO! Forward 1.0")
 
 	// Create a new signals channel
 	signals := make(chan os.Signal)
@@ -48,10 +99,9 @@ func main() {
 	signal.Notify(signals, os.Interrupt)
 
 	// Create listening tcp server
-	incomingAddress := "127.0.0.1:" + strconv.Itoa(portFrom)
-	incoming, err := net.Listen("tcp", incomingAddress)
+	incoming, err := net.Listen("tcp", srcBind)
 	if err != nil {
-		println("Error: Could not bind on local port:", portFrom)
+		println("Error: Could not bind on address:", srcBind)
 		os.Exit(1)
 	}
 
@@ -109,10 +159,9 @@ func acceptClient(incomingServer net.Listener, connections chan<- connection) {
 		}
 
 		// Build tcp session to forward data to the target
-		targetAddress := "127.0.0.1:" + strconv.Itoa(portTo)
-		target, err := net.Dial("tcp", targetAddress)
+		target, err := net.Dial("tcp", dstBind)
 		if err != nil {
-			println("Error: Could not establish tcp connection to:", targetAddress)
+			println("Error: Could not establish tcp connection to:", dstBind)
 			client.Close()
 			continue
 		}
